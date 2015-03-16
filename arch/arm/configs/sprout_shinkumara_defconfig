@@ -437,7 +437,6 @@ CONFIG_MIGRATION=y
 CONFIG_ZONE_DMA_FLAG=0
 CONFIG_BOUNCE=y
 CONFIG_VIRT_TO_BUS=y
-# CONFIG_KSM is not set
 CONFIG_DEFAULT_MMAP_MIN_ADDR=4096
 # CONFIG_ZEROPAGE is not set
 # CONFIG_CLEANCACHE is not set
@@ -2788,3 +2787,12 @@ CONFIG_DQL=y
 CONFIG_NLATTR=y
 # CONFIG_AVERAGE is not set
 # CONFIG_CORDIC is not set
+
+########################### Khristian Flag #################################
+#
+# KSM/UKSM support
+#
+CONFIG_KSM=y
+# CONFIG_UKSM is not set
+CONFIG_KSM_LEGACY=y
+
