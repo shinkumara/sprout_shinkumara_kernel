@@ -810,18 +810,6 @@ balanced:
 		//rt_rq->rt_runtime = RUNTIME_INF;
 		rt_rq->rt_runtime = rt_b->rt_runtime;
 		rt_rq->rt_throttled = 0;
-#ifdef MTK_DEBUG_CGROUP
-		{
-		struct rt_rq *iter = sched_rt_period_rt_rq(rt_b, 0);
-		printk(KERN_EMERG "5-0. disable_runtime %llu\n", iter->rt_runtime);
-		iter = sched_rt_period_rt_rq(rt_b, 1);
-		printk(KERN_EMERG "5-1. disable_runtime %llu\n", iter->rt_runtime);
-		iter = sched_rt_period_rt_rq(rt_b, 2);
-		printk(KERN_EMERG "5-2. disable_runtime %llu\n", iter->rt_runtime);
-		iter = sched_rt_period_rt_rq(rt_b, 3);
-		printk(KERN_EMERG "5-3. disable_runtime %llu\n", iter->rt_runtime);
-		}
-#endif
 		raw_spin_unlock(&rt_rq->rt_runtime_lock);
 		raw_spin_unlock(&rt_b->rt_runtime_lock);
 #ifdef MTK_DEBUG_CGROUP
@@ -936,6 +924,19 @@ static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun)
 	const struct cpumask *span;
 
 	span = sched_rt_period_mask();
+#ifdef CONFIG_RT_GROUP_SCHED
+	/*
+	 * FIXME: isolated CPUs should really leave the root task group,
+	 * whether they are isolcpus or were isolated via cpusets, lest
+	 * the timer run on a CPU which does not service all runqueues,
+	 * potentially leaving other CPUs indefinitely throttled.  If
+	 * isolation is really required, the user will turn the throttle
+	 * off to kill the perturbations it causes anyway.  Meanwhile,
+	 * this maintains functionality for boot and/or troubleshooting.
+	 */
+	if (rt_b == &root_task_group.rt_bandwidth)
+		span = cpu_online_mask;
+#endif
 #ifdef MTK_DEBUG_CGROUP
 	printk(KERN_EMERG " do_sched_rt_period_timer curr_cpu=%d \n", smp_processor_id());
 #endif
@@ -958,14 +959,14 @@ static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun)
 			runtime = rt_rq->rt_runtime;
 			rt_rq->rt_time -= min(rt_rq->rt_time, overrun*runtime);
 			if (rt_rq->rt_throttled) {
-				printk_sched("sched: cpu=%d, [%llu -> %llu]"
+				printk_deferred("sched: cpu=%d, [%llu -> %llu]"
 					     " -= min(%llu, %d*[%llu -> %llu])"
 					     "\n", i, rt_time_pre,
 					     rt_rq->rt_time, rt_time_pre,
 					     overrun, runtime_pre, runtime);
 			}
 			if (rt_rq->rt_throttled && rt_rq->rt_time < runtime) {
-				printk_sched("sched: RT throttling inactivated"
+				printk_deferred("sched: RT throttling inactivated"
 					     " cpu=%d\n", i);
 				rt_rq->rt_throttled = 0;
 #ifdef CONFIG_MT_RT_SCHED_CRIT
@@ -1038,7 +1039,7 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 		struct rt_bandwidth *rt_b = sched_rt_bandwidth(rt_rq);
 		int cpu = rq_cpu(rt_rq->rq);
 
-		printk_sched("sched: cpu=%d rt_time %llu <-> runtime"
+		printk_deferred("sched: cpu=%d rt_time %llu <-> runtime"
 			     " [%llu -> %llu], exec_delta_time[%llu]"
 			     ", clock_task[%llu], exec_start[%llu]\n",
 			     cpu, rt_rq->rt_time, runtime_pre, runtime,
@@ -1057,8 +1058,7 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 
 		//	if (!once) {
 		//		once = true;
-				printk_sched("sched: RT throttling activated cpu=%d\n",
-					cpu);
+				printk_deferred("sched: RT throttling activated\n");
 		//	}
 #ifdef CONFIG_MT_RT_SCHED_CRIT
 			trace_sched_rt_crit(cpu, rt_rq->rt_throttled);
@@ -1137,6 +1137,13 @@ inc_rt_prio_smp(struct rt_rq *rt_rq, int prio, int prev_prio)
 {
 	struct rq *rq = rq_of_rt_rq(rt_rq);
 
+#ifdef CONFIG_RT_GROUP_SCHED
+	/*
+	 * Change rq's cpupri only if rt_rq is the top queue.
+	 */
+	if (&rq->rt != rt_rq)
+		return;
+#endif
 	if (rq->online && prio < prev_prio)
 		cpupri_set(&rq->rd->cpupri, rq->cpu, prio);
 }
@@ -1146,6 +1153,13 @@ dec_rt_prio_smp(struct rt_rq *rt_rq, int prio, int prev_prio)
 {
 	struct rq *rq = rq_of_rt_rq(rt_rq);
 
+#ifdef CONFIG_RT_GROUP_SCHED
+	/*
+	 * Change rq's cpupri only if rt_rq is the top queue.
+	 */
+	if (&rq->rt != rt_rq)
+		return;
+#endif
 	if (rq->online && rt_rq->highest_prio.curr != prev_prio)
 		cpupri_set(&rq->rd->cpupri, rq->cpu, rt_rq->highest_prio.curr);
 }
@@ -2185,7 +2199,11 @@ static void watchdog(struct rq *rq, struct task_struct *p)
 	if (soft != RLIM_INFINITY) {
 		unsigned long next;
 
-		p->rt.timeout++;
+		if (p->rt.watchdog_stamp != jiffies) {
+			p->rt.timeout++;
+			p->rt.watchdog_stamp = jiffies;
+		}
+
 		next = DIV_ROUND_UP(min(soft, hard), USEC_PER_SEC/HZ);
 		if (p->rt.timeout > next)
 			p->cputime_expires.sched_exp = p->se.sum_exec_runtime;
